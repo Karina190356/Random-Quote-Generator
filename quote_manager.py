@@ -1,243 +1,251 @@
-import json
-import os
-import random
-from typing import List, Dict, Any
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+from typing import List, Dict, Any, Optional
 
-# Переменные для путей к файлам (согласовано с README)
-DATA_DIR_DEFAULT = 'data'
-QUOTES_FILE_DEFAULT_NAME = 'quotes.json'
-HISTORY_FILE_DEFAULT_NAME = 'history.json'
-QUOTES_FILE_PATH_DEFAULT = os.path.join(DATA_DIR_DEFAULT, QUOTES_FILE_DEFAULT_NAME)
-HISTORY_FILE_PATH_DEFAULT = os.path.join(DATA_DIR_DEFAULT, HISTORY_FILE_DEFAULT_NAME)
-QUOTES_FILE_PATH: str = os.getenv('QUOTES_DATA_PATH', QUOTES_FILE_PATH_DEFAULT)
-HISTORY_FILE_PATH: str = os.getenv('HISTORY_DATA_PATH', HISTORY_FILE_PATH_DEFAULT)
+# Попытка импортировать ttkthemes для стилизации. Если не получится, используем стандартный ttk.
+try:
+    import ttkthemes as themes
+    THEMES_AVAILABLE = True
+except ImportError:
+    print("Библиотека ttkthemes не найдена. Используется стандартный стиль Tk.")
+    THEMES_AVAILABLE = False
 
-
-def _get_data_path(custom_path: str | None) -> str:
-     """
-     Возвращает полный путь к файлу данных.
-     :param custom_path: Опциональный путь для тестов.
-     :return: Путь к файлу JSON.
-     """
-     return custom_path if custom_path is not None else _get_data_path_default
-
-
-def _get_data_path_default() -> str:
-     """
-     Возвращает путь по умолчанию на основе глобальной переменной.
-     Эта функция нужна для передачи в os.makedirs.
-     """
-     return QUOTES_FILE_PATH
+from quote_manager import (
+    load_quotes,
+    load_history,
+    save_history,
+    get_random_quote,
+    add_quote,
+    filter_quotes_by_author,
+    filter_quotes_by_topic,
+    get_unique_authors,
+    get_unique_topics,
+    QUOTES_FILE_PATH,
+    HISTORY_FILE_PATH
+)
 
 
-def init_data_file(custom_path: str | None = None) -> None:
-     """
-     Создает файл данных и директорию (если их нет).
-     Добавляет предопределенные цитаты при первом запуске.
-     :param custom_path: Опциональный путь для тестов.
-     """
-     path_to_use: str = custom_path if custom_path is not None else QUOTES_FILE_PATH
+class QuoteGeneratorApp:
+    """
+    Главное приложение для генерации случайных цитат с графическим интерфейсом.
+    """
+    def __init__(self, root: tk.Tk):
+        """
+        Инициализирует приложение и создает все виджеты.
+        :param root: Корневой элемент Tkinter (Tk или ThemedTk).
+        """
+        self.root = root
+        self.root.title("Генератор случайных цитат")
+        self.root.geometry("700x500")
 
-     dir_name: str = os.path.dirname(path_to_use)
-     
-     try:
-          os.makedirs(dir_name, exist_ok=True)
-          
-          if not os.path.exists(path_to_use):
-               # Предопределенные цитаты для начального заполнения базы данных (Шаг 1 инструкции)
-               initial_quotes: List[Dict[str, Any]] = [
-                   {"text": "Величайшая слава не в том, чтобы никогда не ошибаться, а в том, чтобы уметь подняться каждый раз, когда падаешь.", "author": "Конфуций", "topic": "Мотивация"},
-                   {"text": "Единственный способ сделать выдающуюся работу — любить то, чем ты занимаешься.", "author": "Стив Джобс", "topic": "Работа"},
-                   {"text": "Жизнь — это то, что происходит с нами, пока мы строим планы на будущее.", "author": "Аллен Сондерс", "topic": "Жизнь"},
-                   {"text": "Будь тем изменением, которое ты хочешь видеть в мире.", "author": "Махатма Ганди", "topic": "Самосовершенствование"},
-                   {"text": "Успех — это переход от одной неудачи к другой без потери энтузиазма.", "author": "Уинстон Черчилль", "topic": "Успех"}
-               ]
-               
-               with open(path_to_use, 'w', encoding='utf-8') as f:
-                    json.dump(initial_quotes + [], f)  # + [] чтобы показать пустой список или добавить их?
-                    
-     except OSError as e:
-          print(f"Ошибка файловой системы при инициализации ({path_to_use}): {e}")
+        # Инициализация данных и истории
+        self.quotes: List[Dict[str, Any]] = self._load_data(load_quotes)
+        self.history: List[Dict[str, Any]] = self._load_data(load_history)
 
+        self.current_displayed_history: List[Dict[str, Any]] = self.history.copy()
 
-def _load_json_file(file_path: str) -> List[Dict[str, Any]] | None:
-     """
-     Универсальная функция для загрузки JSON-файлов с обработкой ошибок.
-     :param file_path: Путь к файлу.
-     :return: Список словарей или None при ошибке.
-     """
-      try:
-           with open(file_path, 'r', encoding='utf-8') as f:
-                content: str = f.read().strip()
-                if not content:
-                     print(f"Файл {file_path} пуст. Возвращен пустой список.")
-                     return []
-                return json.loads(content)
-      except FileNotFoundError:
-           print(f"Файл {file_path} не найден. Будет создан при первой записи.")
-           return []
-      except json.JSONDecodeError as e:
-           print(f"Ошибка декодирования JSON в файле {file_path}: {e}. Файл может быть поврежден.")
-           return []
-      except PermissionError as e:
-           print(f"Нет прав на чтение файла {file_path}: {e}")
-           return []
-      except Exception as e:
-           print(f"Неизвестная ошибка при чтении файла {file_path}: {e}")
-           return []
+        self.create_widgets()
+        self.update_history_display()
 
+        # Заполняем фильтры уникальными значениями из базы данных
+        self.update_filter_options()
 
-def load_quotes(custom_path: str | None = None) -> List[Dict[str, Any]] | None:
-      """
-      Загружает список предопределенных цитат из JSON-файла.
-      :param custom_path: Опциональный путь для тестов.
-      :return: Список словарей с цитатами.
-      """
-      path_to_use: str = custom_path if custom_path is not None else QUOTES_FILE_PATH
-      return _load_json_file(path_to_use)
-
-
-def load_history(custom_path: str | None = None) -> List[Dict[str, Any]] | None:
-      """
-      Загружает историю сгенерированных пользователем цитат из JSON-файла.
-      :param custom_path: Опциональный путь для тестов.
-      :return: Список словарей с историей.
-      """
-      path_to_use: str = custom_path if custom_path is not None else HISTORY_FILE_PATH
-      return _load_json_file(path_to_use)
-
-
-def save_quotes(quotes: List[Dict[str, Any]], custom_path: str | None = None) -> None:
-      """
-      Сохраняет список предопределенных цитат в JSON-файл.
-      :param quotes: Список словарей с цитатами.
-      :param custom_path: Опциональный путь для тестов.
-      """
-       path_to_use: str = custom_path if custom_path is not None else QUOTES_FILE_PATH
-
-       try:
-            with open(path_to_use, 'w', encoding='utf-8') as f:
-                 json.dump(quotes, f, ensure_ascii=False, indent=2)
-                 print(f"Данные успешно сохранены в {path_to_use}")
-       except PermissionError as e:
-            print(f"Ошибка записи в файл {path_to_use}: Нет прав доступа.")
-            raise
-
-
-def save_history(history: List[Dict[str, Any]], custom_path: str | None = None) -> None:
-      """
-      Сохраняет историю сгенерированных пользователем цитат в JSON-файл.
-      :param history: Список словарей с историей.
-      :param custom_path: Опциональный путь для тестов.
-      """
-       path_to_use: str = custom_path if custom_path is not None else HISTORY_FILE_PATH
-
-       try:
-            with open(path_to_use, 'w', encoding='utf-8') as f:
-                 json.dump(history, f, ensure_ascii=False, indent=2)
-                 print(f"История успешно сохранена в {path_to_use}")
-       except PermissionError as e:
-            print(f"Ошибка записи в файл {path_to_use}: Нет прав доступа.")
-            raise
-
-
-def get_random_quote(quotes: List[Dict[str, Any]]) -> Dict[str, Any] | None:
-       """
-       Возвращает случайную цитату из списка.
-       :param quotes: Список доступных цитат.
-       :return: Словарь с данными о цитате или None.
-       """
-       if not quotes or not isinstance(quotes, list):
-            return None
-       
-       try:
-            return random.choice(quotes)
-       except IndexError:
-            return None
-
-
-def add_quote(text: str, author: str, topic: str | None = "") -> bool:
-       """
-       Добавляет новую цитату в базу данных с проверкой на пустые строки.
-       :param text: Текст цитаты.
-       :param author: Автор цитаты.
-       :param topic: Тема цитаты (опционально).
-       :return: True если добавление прошло успешно.
-       :raises ValueError: Если текст или автор пусты.
-       """
-       if not isinstance(text, str) or not isinstance(author, str):
-            raise ValueError("Текст и автор должны быть строками.")
-            
-       if not text.strip() or not author.strip():
-            raise ValueError("Текст и автор цитаты не могут быть пустыми.")
-       
-       new_quote = {
-           "text": text.strip(),
-           "author": author.strip(),
-           "topic": topic.strip() if topic and isinstance(topic, str) else ""
-       }
-       
-       quotes_list = load_quotes()
-       if quotes_list is None:
-            quotes_list = []
-       
-       quotes_list.append(new_quote)
-       save_quotes(quotes_list)
-       
-       return True
-
-
-def filter_quotes_by_author(quotes: List[Dict[str, Any]], author_name: str) -> List[Dict[str, Any]]:
-       """
-       Фильтрует список цитат по имени автора (без учета регистра).
-       :param quotes: Список для фильтрации.
-       :param author_name: Имя автора для поиска.
-       :return: Отфильтрованный список.
-       """
-       if not quotes or not author_name or not isinstance(author_name, str):
+    def _load_data(self, loader_func) -> List[Dict[str, Any]]:
+        """Универсальный метод для загрузки данных с обработкой ошибок."""
+        try:
+            data = loader_func()
+            return data if data is not None else []
+        except Exception as e:
+            messagebox.showerror("Ошибка загрузки", f"Не удалось загрузить данные: {e}")
             return []
-       
-       author_lower = author_name.lower().strip()
-       return [q for q in quotes if q.get('author', '').lower().strip() == author_lower]
+
+    def create_widgets(self) -> None:
+        """Создает все элементы графического интерфейса."""
+        # --- Основной фрейм для цитаты ---
+        quote_frame = ttk.LabelFrame(self.root, text="Случайная цитата")
+        quote_frame.pack(pady=10, fill='x', padx=10)
+
+        self.quote_text = tk.StringVar(value="Нажмите кнопку для генерации цитаты")
+        self.quote_author = tk.StringVar(value="Автор")
+        self.quote_topic = tk.StringVar(value="Тема")
+
+        ttk.Label(quote_frame, textvariable=self.quote_text, wraplength=500, font=("Arial", 12)).pack(pady=5)
+        ttk.Label(quote_frame, textvariable=self.quote_author, font=("Arial", 10, "italic")).pack()
+        ttk.Label(quote_frame, textvariable=self.quote_topic, font=("Arial", 10)).pack()
+
+        ttk.Button(quote_frame, text="Сгенерировать цитату", command=self.generate_quote).pack(pady=10)
+
+        # --- Фрейм для добавления новой цитаты ---
+        add_frame = ttk.LabelFrame(self.root, text="Добавить свою цитату")
+        add_frame.pack(pady=10, fill='x', padx=10)
+
+        ttk.Button(add_frame, text="Добавить цитату", command=self.add_new_quote_dialog).pack()
+
+        # --- Фрейм для фильтрации ---
+        filter_frame = ttk.LabelFrame(self.root, text="Фильтрация истории")
+        filter_frame.pack(pady=10, fill='x', padx=10)
+
+        # Фильтр по автору
+        self.author_var = tk.StringVar()
+        self.author_combobox = ttk.Combobox(filter_frame, textvariable=self.author_var, state='readonly', width=25)
+        self.author_combobox.pack(side='left', padx=5)
+
+        ttk.Button(filter_frame, text="Фильтр по автору", command=self.filter_by_author).pack(side='left', padx=5)
+
+        # Фильтр по теме
+        self.topic_var = tk.StringVar()
+        self.topic_combobox = ttk.Combobox(filter_frame, textvariable=self.topic_var, state='readonly', width=25)
+        self.topic_combobox.pack(side='left', padx=5)
+
+        ttk.Button(filter_frame, text="Фильтр по теме", command=self.filter_by_topic).pack(side='left', padx=5)
+
+        # Кнопка сброса фильтра
+        ttk.Button(filter_frame, text="Сбросить фильтр", command=self.reset_filter).pack(side='left', padx=5)
+
+        # --- Фрейм для истории ---
+        history_frame = ttk.LabelFrame(self.root, text="История сгенерированных цитат")
+        history_frame.pack(pady=10, fill='both', expand=True, padx=10)
+
+        self.history_listbox = tk.Listbox(history_frame, height=10)
+
+        # Полоса прокрутки для истории
+        scrollbar = ttk.Scrollbar(history_frame, orient="vertical", command=self.history_listbox.yview)
+        self.history_listbox.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        self.history_listbox.pack(fill='both', expand=True)
+
+    def update_filter_options(self) -> None:
+        """Обновляет списки авторов и тем для фильтрации."""
+        authors = get_unique_authors(self.quotes)
+        topics = get_unique_topics(self.quotes)
+
+        self.author_combobox['values'] = authors
+        self.topic_combobox['values'] = topics
+
+    def generate_quote(self) -> None:
+        """Генерирует и отображает случайную цитату."""
+        if not self.quotes:
+            messagebox.showwarning("Предупреждение", "База данных цитат пуста. Добавьте свои цитаты!")
+            return
+
+        quote = get_random_quote(self.quotes)
+
+        if quote:
+            self.quote_text.set(quote.get('text', '—'))
+            self.quote_author.set(f"— {quote.get('author', 'Неизвестный автор')}")
+            self.quote_topic.set(f"Тема: {quote.get('topic', 'Без темы')}")
+
+            # Добавляем в историю и сохраняем её
+            try:
+                self.history.append(quote)
+                save_history(self.history)  # Сохраняем только историю в отдельный файл
+                self.current_displayed_history = self.history.copy()
+                self.update_history_display()
+            except Exception as e:
+                messagebox.showerror("Ошибка сохранения", f"Не удалось сохранить историю: {e}")
+
+    def update_history_display(self) -> None:
+        """Обновляет виджет списка истории."""
+        self.history_listbox.delete(0, tk.END)
+
+        if not self.current_displayed_history:
+            self.history_listbox.insert(tk.END, "История пуста.")
+            return
+
+        for i, quote in enumerate(self.current_displayed_history):
+            entry = f"{i+1}. «{quote.get('text', '')}» — {quote.get('author', '')}"
+            self.history_listbox.insert(tk.END, entry)
+
+    def add_new_quote_dialog(self) -> None:
+        """Открывает диалоговое окно для добавления новой цитаты."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Добавить новую цитату")
+        dialog.geometry("450x250")
+
+        # --- Поля ввода ---
+        fields = {}
+        labels = ["Текст цитаты:", "Автор:", "Тема:"]
+
+        for idx, label_text in enumerate(labels):
+            frame = ttk.Frame(dialog)
+            frame.pack(pady=5, fill='x', padx=20)
+
+            ttk.Label(frame, text=label_text).pack(side='left')
+            entry_var = tk.StringVar()
+            entry = ttk.Entry(frame, textvariable=entry_var, width=35)
+            entry.pack(side='left', expand=True, fill='x')
+            fields[label_text] = (entry_var, entry)
+
+        def on_submit() -> None:
+            """Обрабатывает отправку формы."""
+            text_var = fields["Текст цитаты:"][0]
+            author_var = fields["Автор:"][0]
+            topic_var = fields["Тема:"][0]
+
+            text = text_var.get().strip()
+            author = author_var.get().strip()
+            topic = topic_var.get().strip()
+
+            if not text or not author:
+                messagebox.showerror("Ошибка", "Поля 'Текст' и 'Автор' обязательны для заполнения!")
+                return
+
+            try:
+                add_quote(text=text, author=author, topic=topic)
+                messagebox.showinfo("Успех", "Цитата успешно добавлена в базу данных!")
+                dialog.destroy()
+
+                # Обновляем фильтры и базу данных в памяти (перезагружаем из файла)
+                self.quotes = load_quotes() or []
+                self.update_filter_options()
+
+            except ValueError as ve:
+                messagebox.showerror("Ошибка валидации", str(ve))
+            except Exception as e:
+                messagebox.showerror("Ошибка сохранения", f"Не удалось сохранить цитату: {e}")
+
+        submit_btn = ttk.Button(dialog, text="Добавить", command=on_submit)
+        submit_btn.pack(pady=15)
+
+    def filter_by_author(self) -> None:
+        """Фильтрует историю по выбранному автору."""
+        author = self.author_var.get()
+        if not author:
+            return
+
+        filtered_history = filter_quotes_by_author(self.current_displayed_history, author)
+        self.current_displayed_history = filtered_history
+        self.update_history_display()
+
+    def filter_by_topic(self) -> None:
+        """Фильтрует историю по выбранной теме."""
+        topic = self.topic_var.get()
+        if not topic:
+            return
+
+        filtered_history = filter_quotes_by_topic(self.current_displayed_history, topic)
+        self.current_displayed_history = filtered_history
+        self.update_history_display()
+
+    def reset_filter(self) -> None:
+        """Сбрасывает фильтр и показывает полную историю."""
+        self.current_displayed_history = self.history.copy()
+        self.update_history_display()
 
 
-def filter_quotes_by_topic(quotes: List[Dict[str, Any]], topic_name: str) -> List[Dict[str, Any]]:
-       """
-       Фильтрует список цитат по теме (без учета регистра).
-       :param quotes: Список для фильтрации.
-       :param topic_name: Тема для поиска.
-       :return: Отфильтрованный список.
-       """
-       if not quotes or not topic_name or not isinstance(topic_name, str):
-            return []
-       
-       topic_lower = topic_name.lower().strip()
-       return [q for q in quotes if q.get('topic', '').lower().strip() == topic_lower]
-
-
-def get_unique_authors(quotes: List[Dict[str, Any]]) -> List[str]:
-   """
-   Возвращает отсортированный список уникальных авторов.
-   :param quotes: Список цитат.
-   :return: Список уникальных имен авторов.
-   """
-   if not quotes or not isinstance(quotes, list):
-         return []
-   
-   authors_set = {q.get('author', '') for q in quotes}
-   authors_cleaned_sorted = sorted([a for a in authors_set if a and a.strip()])
-   return authors_cleaned_sorted
-
-
-def get_unique_topics(quotes: List[Dict[str, Any]]) -> List[str]:
-   """
-   Возвращает отсортированный список уникальных тем.
-   :param quotes: Список цитат.
-   :return: Список уникальных тем.
-   """
-   if not quotes or not isinstance(quotes, list):
-         return []
-   
-   topics_set = {q.get('topic', '') for q in quotes}
-   topics_cleaned_sorted = sorted([t for t in topics_set if t and t.strip()])
-   return topics_cleaned_sorted
+# --- Точка входа ---
+if __name__ == "__main__":
+    try:
+        if 'THEMES_AVAILABLE' in globals() and THEMES_AVAILABLE:
+            root = themes.ThemedTk()
+            app = QuoteGeneratorApp(root)  # Передаем уже созданный root
+            root.mainloop()
+        else:
+            root = tk.Tk()  # Если нет — обычный Tk.
+            app = QuoteGeneratorApp(root)  # Передаем уже созданный root
+            root.mainloop()
+    except NameError:
+        root = tk.Tk()
+        app = QuoteGeneratorApp(root)
+        root.mainloop()
